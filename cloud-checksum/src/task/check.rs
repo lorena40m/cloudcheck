@@ -219,23 +219,27 @@ impl CheckTask {
         self = self.merge_fn(|a, b| a.is_same(b)).await?;
         Ok(self)
     }
-
+    
     /// Determine the set of checksums for all files.
     pub async fn merge_comparable(mut self) -> Result<Self> {
         self = self.merge_fn(|a, b| a.comparable(b)).await?;
-        // The checksum value doesn't mean much if two sums files are comparable but not equal,
-        // so it should be cleared.
-        let mut files = BTreeMap::new();
-        while let Some((mut file, locations)) = self.objects.0.pop_last() {
-            file.checksums
-                .iter_mut()
-                .for_each(|(_, checksum)| *checksum = Default::default());
-            files.insert(file, locations);
-        }
+    
+        // If two sums files are comparable but not equal,
+        // their checksums don't hold meaningful values and should be cleared.
+        let files = self
+            .objects
+            .0
+            .into_iter()
+            .map(|(mut file, locations)| {
+                file.checksums.values_mut().for_each(|checksum| *checksum = Default::default());
+                (file, locations)
+            })
+            .collect();
+    
         self.objects = CheckObjects(files);
-
+    
         Ok(self)
-    }
+    }    
 
     /// Runs the check task, returning the list of matching files.
     pub async fn run(self) -> Result<CheckObjects> {
@@ -372,7 +376,7 @@ pub(crate) mod test {
         let files = write_test_files_multiple_groups(tmp).await?;
 
         let check = CheckTaskBuilder::default()
-            .with_input_files(files.iter().map(|name| name.to_string()).collect())
+            .with_input_files(files.clone())
             .build()
             .await?;
 
@@ -383,18 +387,18 @@ pub(crate) mod test {
             vec![
                 SumsFile::new(
                     Some(TEST_FILE_SIZE),
-                    BTreeMap::from_iter(vec![
-                        ("sha256".parse()?, Checksum::new("abc".to_string()),),
-                        ("crc32".parse()?, Checksum::new("efg".to_string()),),
-                        ("crc32c".parse()?, Checksum::new("hij".to_string()),)
+                    BTreeMap::from_iter([
+                        ("sha256".parse()?, Checksum::new("abc".into())),
+                        ("crc32".parse()?, Checksum::new("efg".into())),
+                        ("crc32c".parse()?, Checksum::new("hij".into()))
                     ])
                 ),
                 SumsFile::new(
                     Some(TEST_FILE_SIZE),
-                    BTreeMap::from_iter(vec![
-                        ("md5".parse()?, Checksum::new("123".to_string()),),
-                        ("sha1".parse()?, Checksum::new("456".to_string()),),
-                        ("sha256".parse()?, Checksum::new("789".to_string()),)
+                    BTreeMap::from_iter([
+                        ("md5".parse()?, Checksum::new("123".into())),
+                        ("sha1".parse()?, Checksum::new("456".into())),
+                        ("sha256".parse()?, Checksum::new("789".into()))
                     ])
                 )
             ]
@@ -409,7 +413,7 @@ pub(crate) mod test {
         let files = write_test_files_not_comparable(tmp).await?;
 
         let check = CheckTaskBuilder::default()
-            .with_input_files(files.iter().map(|name| name.to_string()).collect())
+            .with_input_files(files.clone())
             .with_group_by(GroupBy::Comparability)
             .build()
             .await?;
@@ -421,46 +425,48 @@ pub(crate) mod test {
             vec![
                 SumsFile::new(
                     Some(TEST_FILE_SIZE),
-                    BTreeMap::from_iter(vec![
-                        ("crc32".parse()?, Default::default(),),
-                        ("crc32c".parse()?, Default::default(),)
+                    BTreeMap::from_iter([
+                        ("crc32".parse()?, Default::default()),
+                        ("crc32c".parse()?, Default::default())
                     ])
                 ),
                 SumsFile::new(
                     Some(TEST_FILE_SIZE),
-                    BTreeMap::from_iter(vec![
-                        ("md5".parse()?, Default::default(),),
-                        ("sha1".parse()?, Default::default(),),
-                        ("sha256".parse()?, Default::default(),)
+                    BTreeMap::from_iter([
+                        ("md5".parse()?, Default::default()),
+                        ("sha1".parse()?, Default::default()),
+                        ("sha256".parse()?, Default::default())
                     ])
-                ),
+                )
             ]
         );
 
         Ok(())
     }
 
+
     pub(crate) async fn write_test_files_one_group(tmp: TempDir) -> Result<Vec<String>, Error> {
         let path = tmp.into_path();
-
         let mut names = write_test_files(&path).await?;
-
-        let c_name = path.join("c").to_string_lossy().to_string();
-        let c = SumsFile::new(
-            Some(TEST_FILE_SIZE),
-            BTreeMap::from_iter(vec![
-                ("sha256".parse()?, Checksum::new("789".to_string())),
-                ("crc32".parse()?, Checksum::new("012".to_string())),
-            ]),
-        );
+    
+        let c_path = path.join("c");
+        let c_file_name = c_path.to_string_lossy().to_string();
+    
+        let checksums = BTreeMap::from_iter([
+            ("sha256".parse()?, Checksum::new("789".into())),
+            ("crc32".parse()?, Checksum::new("012".into())),
+        ]);
+    
+        let sums_file = SumsFile::new(Some(TEST_FILE_SIZE), checksums);
+    
         FileBuilder::default()
-            .with_file(c_name.to_string())
+            .with_file(&c_file_name)
             .build()?
-            .write_sums(&c)
+            .write_sums(&sums_file)
             .await?;
-
-        names.push(c_name);
-
+    
+        names.push(c_file_name);
+    
         Ok(names)
     }
 
