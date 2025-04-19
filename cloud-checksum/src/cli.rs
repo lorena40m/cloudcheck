@@ -17,16 +17,17 @@ use tokio::io::stdin;
 /// Execute the command from the args.
 pub async fn execute_args(args: Command) -> Result<()> {
     let client = Arc::new(default_s3_client().await?);
+    let Command { commands, optimization } = args;
 
-    match args.commands {
-        Subcommands::Generate(generate_args) => {
-            generate(generate_args, args.optimization, client).await?;
+    match commands {
+        Subcommands::Generate(args) => {
+            generate(args, optimization, client).await?;
         }
-        Subcommands::Check(check_args) => {
-            check(check_args, client).await?;
+        Subcommands::Check(args) => {
+            check(args, client).await?;
         }
-        Subcommands::Copy(copy_args) => {
-            copy(copy_args, args.optimization, client).await?;
+        Subcommands::Copy(args) => {
+            copy(args, optimization, client).await?;
         }
     }
 
@@ -96,11 +97,17 @@ pub async fn generate(
     Ok(())
 }
 
-/// Perform a check for comparability on the input files.
-pub async fn comparable_check(input: Vec<String>, client: Arc<Client>) -> Result<CheckObjects> {
+/// Helper to build and run a CheckTask.
+async fn run_check_task(
+    input: Vec<String>,
+    group_by: GroupBy,
+    update: Option<bool>,
+    client: Arc<Client>,
+) -> Result<CheckObjects> {
     CheckTaskBuilder::default()
         .with_input_files(input)
-        .with_group_by(GroupBy::Comparability)
+        .with_group_by(group_by)
+        .with_update(update)
         .with_client(client)
         .build()
         .await?
@@ -108,20 +115,24 @@ pub async fn comparable_check(input: Vec<String>, client: Arc<Client>) -> Result
         .await
 }
 
+/// Perform a check for comparability on the input files.
+pub async fn comparable_check(input: Vec<String>, client: Arc<Client>) -> Result<CheckObjects> {
+    run_check_task(input, GroupBy::Comparability, None, client).await
+}
+
 /// Perform the check sub command from the args.
 pub async fn check(check: Check, client: Arc<Client>) -> Result<CheckOutput> {
-    let files = CheckTaskBuilder::default()
-        .with_input_files(check.input)
-        .with_group_by(check.group_by)
-        .with_update(check.update)
-        .with_client(client)
-        .build()
-        .await?
-        .run()
-        .await?;
-    let output = CheckOutput::from((files, check.group_by));
+    let files = run_check_task(
+        check.input.clone(),
+        check.group_by,
+        check.update,
+        client,
+    )
+    .await?;
 
+    let output = CheckOutput::from((files, check.group_by));
     println!("{}", output.to_json_string()?);
+
     Ok(output)
 }
 
